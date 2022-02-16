@@ -9,8 +9,10 @@ from .tf_constants import TF_PI
 K.set_floatx('float64')
 
 __all__ = [
-    "tf_gauss_log_prob",
-    "tf_vonmises_log_prob",
+    "tf_gaussian_log_prob",
+    "tf_gaussian_kld",
+    "tf_gaussian_reparametrize",
+    "tf_log_mean_exp",
     "tfp_sample_beta_distribution",
     "tf_sample_beta_distribution",
     "spot_mix",
@@ -20,20 +22,23 @@ __all__ = [
 ]
 
 
-def tf_gauss_log_prob(x, loc=0.0, scale=1.0):
-    d = - tf.math.log(tf.math.sqrt(2.*TF_PI*scale))
-    var = - (tf.math.pow(x - loc, 2.) / (2.*scale))
-    return d + var
+def tf_gaussian_log_prob(z, mu, logvar):
+    return -0.5*(tf.math.log(2.0*TF_PI) + logvar + tf.math.pow((z-mu), 2.0)/tf.math.exp(logvar))
 
 
-def tf_vonmises_log_prob(x, mu=0.0, beta=1.0):
-    std  = tf.math.exp(beta)
-    vm = tfp.distributions.VonMises(mu, std)
-    return vm.log_prob(x)
-    #b_i0 = tf.math.bessel_i0(std)
-    #d = - tf.math.log(2.*TF_PI*b_i0)
-    #var = beta*tf.math.cos(x - mu)
-    #return d + var
+def tf_gaussian_kld(z_mu, z_logvar):
+    return 0.5*(K.pow(z_mu, 2.0) + K.exp(z_logvar) - 1.0 - z_logvar)
+
+
+def tf_gaussian_reparametrize(mu, logvar):
+    std = K.exp(0.5 * logvar)
+    return mu + tf.random.normal(tf.shape(std), dtype=K.floatx()) * std
+
+
+def tf_log_mean_exp(x, axis):
+    m  = tf.math.reduce_max(x, axis=axis)
+    m2 = tf.math.reduce_max(x, axis=axis, keepdims=True)
+    return m + K.log(K.mean(K.exp(x-m2), axis))
 
 
 def tfp_sample_beta_distribution(alpha, beta, shape=[1]):
