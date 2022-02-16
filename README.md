@@ -2,9 +2,12 @@
 
 ## Towards a Deep Learning Approach to Transform Motion to Sound using Motiongrams and Spectrogram Inversion
 
-This repository presents the initial results from a developed deep neural network that learns a mapping from a motiongram to a spectrogram. We show that this system can be used in creative music production as well as in analytical tasks such as dance- or music genre classification [<i> Excerpt from the current abstract </i>].
+This repository presents the initial results from a developed deep neural network that learns a mapping from a motiongram to a spectrogram. We show that this system can be used in creative music production as well as in analytical tasks such as dance- or music genre classification [<i>Excerpt from the current abstract</i>].
 
 ### TODO
+
+(<i>@all: Feel free to update and/or add items to the TODO list</i>)
+
 - [ ] Elaborate README File #desc @sophus 
 	- [ ] Add manual
 	- [ ] Add correct license
