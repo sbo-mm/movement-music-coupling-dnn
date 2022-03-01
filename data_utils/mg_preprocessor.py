@@ -49,7 +49,7 @@ def apply_over_axes_4d(arr4d, func2d):
 
 	return res
 
-def compute_motiongrams(video_patch, orgdims, axis):
+def compute_motiongrams(video_patch, orgdims, axis, with_filter=True):
 	# Reshape to original video dimensions
 	newshape = (*orgdims, *video_patch.shape[1:])
 	vp = np.reshape(
@@ -63,7 +63,9 @@ def compute_motiongrams(video_patch, orgdims, axis):
 
 	# Apply FILTERING here
 	motion_frames = (motion_frames > MG_THRESH*255)*motion_frames
-	motion_frames = apply_over_axes_4d(motion_frames, get_medfilt2d())
+
+	if with_filter:
+		motion_frames = apply_over_axes_4d(motion_frames, get_medfilt2d())
 
 	# Horz mg is axis 0: Collapse axis 1
 	mx   = np.mean(motion_frames, axis=1)
@@ -75,11 +77,10 @@ def compute_motiongrams(video_patch, orgdims, axis):
 
 	return mx_c, my_c
 
-
-def transform_video2motiongram(videofile, frame_length, hop_length):
+def transform_video2motiongram(videoframes, frame_length, hop_length, with_filter=True):
 	# Acquire videoframes in numpy format
-	vframes, vinfo = video2numpy(videofile)
-	samplerate, width, height = vinfo
+	vframes = videoframes[0] #video2numpy(videofile)
+	samplerate, width, height = videoframes[1]
 
 	# Save original videoframe dimensions
 	orgdims = (width, height)
@@ -116,7 +117,7 @@ def transform_video2motiongram(videofile, frame_length, hop_length):
 	for bl_s in range(0, shape[-1], n_columns):
 		bl_t = min(bl_s + n_columns, shape[-1])
 		gramx[..., bl_s:bl_t], gramy[..., bl_s:bl_t] \
-			= compute_motiongrams(vsliced[..., bl_s:bl_t], orgdims, -2)
+			= compute_motiongrams(vsliced[..., bl_s:bl_t], orgdims, -2, with_filter=with_filter)
 
 	# Perform postprocessing
 	gramx = ((gramx-gramx.min())/(gramx.max()-gramx.min()))*255
