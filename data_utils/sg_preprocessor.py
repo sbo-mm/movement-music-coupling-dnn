@@ -2,26 +2,30 @@ import librosa
 import numpy as np
 
 __all__ = [
+	"loadaudio",
 	"compute_magnitudespec",
 	"normalize_db_0_1",
 	"inverse_normalize_db_0_1",
+	"spectrogram2audio",
+	"FNCOLS",
 	"MAXDURSEC",
 	"SAMPLERATE",
-	"HOP_LENGTH_22050_4_SEC_128C",
+	#"HOP_LENGTH_22050_4_SEC_128C",
 	"TOPDB",
-	"REFDB",
-	"APMIN"
+	"REFDB"
 ]
 
 # AUDIOLOAD & STFT PARAMETERS
 MAXDURSEC  = 4
 SAMPLERATE = 22050
-HOP_LENGTH_22050_4_SEC_128C = 690
+#HOP_LENGTH_22050_4_SEC_128C = 690
 
 # DB NORMALIZATION PARAMETERS
 TOPDB = 80.
 REFDB = 100.
-APMIN = 1e-08
+
+# Convenience Lambda(s)
+FNCOLS = lambda hl: int(np.ceil(MAXDURSEC * SAMPLERATE / hl))
  
 def loadaudio(audiofile):
 	y, _ = librosa.load(
@@ -29,13 +33,6 @@ def loadaudio(audiofile):
 	)
 	y = y / np.amax(np.abs(y))
 	return y	
-
-def compute_stft(y, nfft=1024):
-	stft = librosa.stft(y 		   = y, 
-						n_fft      = nfft, 
-						hop_length = HOP_LENGTH_22050_4_SEC_128C, 
-						window     = "hamming")
-	return stft
 
 def normalize_db_0_1(magspec):
 	db = librosa.amplitude_to_db(
@@ -54,11 +51,35 @@ def inverse_normalize_db_0_1(magspec_db_0_1):
 	)
 	return magspec
 
-def compute_magnitudespec(y, nfft=1024, with_db_normalization=False):
-	stft = compute_stft(y, nfft)
+def compute_stft(y, nfft=1024, overlap=512):
+	stft = librosa.stft(
+		y 		   = y, 
+		n_fft      = nfft, 
+		hop_length = overlap, 
+		window     = "hamming"
+	)
+	return stft
+
+def compute_magnitudespec(y, nfft=1024, overlap=512, with_db_normalization=False):
+	stft = compute_stft(y, nfft, overlap)
 	magspec = np.abs(stft)
 
 	if with_db_normalization:
 		magspec = normalize_db_0_1(magspec)
 
 	return magspec
+
+def spectrogram2audio(magspec, hop_length, with_inverse_normalize=False):
+
+	if with_inverse_normalize:
+		magspec = inverse_normalize_db_0_1(magspec)
+
+	y = librosa.griffinlim(
+		S          = magspec, 
+		hop_length = hop_length,
+		window     = "hamming"
+	)
+	y = y / np.amax(np.abs(y))
+	return y
+
+
