@@ -11,15 +11,14 @@ This repository presents the initial results from a developed deep neural networ
 - [ ] Elaborate README File #desc @sophus 
 	- [ ] Add manual
 	- [ ] Add correct license
-- [ ] Migrate the current implementation to work with custom python package #code @sophus
-- [ ] Fix a bug (incorrect scaling) in the VAE loss #bug @sophus
-- [ ] Update the motiongram computation and inlude source in repo #code @sophus
-- [ ] Update spectrogram computation (avoid MEL-transform and dB-scaling) #code @sophus/stefano
 - [ ] Share all datasets online and implement python function to retrieve #code @sophus
-	- [ ] <i>Update dataset to reflect computation changes</i>
-- [ ] Perform new experiments with the applied updates #futurework @all 
+	- [x] <i>Update dataset to reflect computation changes</i>
 
 ### In Progress
+- [ ] Fix a bug (incorrect scaling) in the VAE loss #bug @sophus
+- [ ] Perform new experiments with the applied updates #futurework @all 
 
 ### Done ✓
-
+- [x] Migrate the current implementation to work with custom python package #code @sophus
+- [x] Update the motiongram computation and inlude source in repo #code @sophus
+- [x] Update spectrogram computation (avoid MEL-transform and dB-scaling) #code @sophus/stefano
