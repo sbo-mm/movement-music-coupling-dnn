@@ -159,7 +159,7 @@ class GaussianBetaVAE(BaseVAE):
 	def get_loss(self, rec_loss, reg_loss):
 		reg_loss_scaled = self.beta*reg_loss
 		loss_batch = reg_loss_scaled + rec_loss
-		loss = K.sum(loss_batch) # / TF_LOG2
+		loss = K.sum(loss_batch) #/ TF_LOG2
 		reg_metric = K.sum(reg_loss_scaled) #/ TF_LOG2
 		rec_metric = K.sum(rec_loss) #/ TF_LOG2
 		return loss, reg_metric, rec_metric
@@ -211,12 +211,12 @@ def make_cnn_vae_encoder(input_dims, latent_dim):
 
 	# Create the hidden layers
 	# TODO: Make network wider NOT deeper (i.e. inception net)
-	enc = Conv1DBlock(32,   kernel=3)(encoder_reshaped)
-	enc = Conv1DBlock(64,   kernel=3)(enc)
-	enc = Conv1DBlock(128,  kernel=3)(enc)
-	enc = Conv1DBlock(256,  kernel=3)(enc)
-	enc = Conv1DBlock(512,  kernel=3)(enc)
-	enc = Conv1DBlock(1024, kernel=3, strides=4)(enc)
+	enc = Conv2DBlock(32,   kernel=(3, 3))(encoder_reshaped)
+	enc = Conv2DBlock(64,   kernel=(3, 3))(enc)
+	enc = Conv2DBlock(128,  kernel=(3, 3))(enc)
+	enc = Conv2DBlock(256,  kernel=(3, 3))(enc)
+	enc = Conv2DBlock(512,  kernel=(3, 3))(enc)
+	enc = Conv2DBlock(1024, kernel=(3, 3), strides=4)(enc)
 
 	# Create the output layer (special for VAE)
 	enc = Flatten()(enc)

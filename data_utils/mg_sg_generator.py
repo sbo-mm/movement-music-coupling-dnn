@@ -5,8 +5,10 @@ import math
 import cv2
 import numpy as np
 import tensorflow as tf
+from librosa.util import MAX_MEM_BLOCK as libMEM_BLOCK
 
 from data_utils.sg_preprocessor import loadaudio, FNCOLS
+from data_utils.sg_preprocessor import MAXDURSEC, MAXOFFSET
 from data_utils.sg_preprocessor import compute_magnitudespec
 
 from sklearn.model_selection import train_test_split
@@ -17,7 +19,11 @@ __all__ = [
 	"get_dataset_for",
 	"get_dataset_small",
 	"prepare_dataset_for_training",
+	"prepare_dataset_for_evaluation",
+	"splice_spectrogram_patches",
+	"num_examples",
 	"extract_dlen_from_tfr",
+	"strip_file",
 	"TFE_FN_TEMPLATE"
 ]
 
@@ -30,14 +36,22 @@ DS_SAVE_PATH   = BASE_DATA_PATH + "/datasets"
 # Filename templates
 NROW_TOKIDX = 3
 NCOL_TOKIDX = 4
-TFE_FN_TEMPLATE = "mg_sg_pair_{0}x{1}_{2}_{3}"
+TFE_FN_TEMPLATE = "mg_sg_pair_{0}x{1}_{2}_{3}_{4}_{5}"
 
 # Random States
 SPLT_RND_STATE = 1337
+np.random.seed(SPLT_RND_STATE)
 
 # Dataset Options
 SHUFFLE_BUF_SIZE = 10000
 PREFECTH_ADDEND  = 100 
+
+# MEMORY PARAMS
+FLOAT64BYTES = 8
+MAX_MEM_BLOCK = libMEM_BLOCK // 2
+
+def num_examples():
+	return len(os.listdir(f'{MG_SAVE_PATH}/'))
 
 def strip_file(filename):
 	return os.path.splitext(filename[filename.rindex('/') + 1:])[0]
@@ -126,14 +140,9 @@ def get_dataset_small(filename, dtype=None):
     dataset = dataset.map(
       lambda ex: parse_tfr_example(ex, cast_to_type=dtype)
     )
-    
     return dataset
 
-def prepare_dataset_for_evaluation(filename, cast_to_type=None):
-	# Fetch the necessary batching we have to do
-	# with the current memory-reduction setup
-	# TODO: explain memory reduction setup
-	batch_size = int(strip_file(filename).split('_')[NCOL_TOKIDX])
+def prepare_dataset_for_evaluation(filename, batch_size, cast_to_type=None):
 	ds = get_dataset_small(filename, dtype=cast_to_type)
 	ds = ds.batch(batch_size)
 	return ds
@@ -182,7 +191,12 @@ def fetch_if_ds_exists_for(nfft_num, fout_dict):
 		for record, ix in existing_records:
 			toks = record.split('_')
 			# Populate the output structure (passed by ref)
-			fout_dict[toks[-2]] = (int(toks[-1]), f'{DS_SAVE_PATH}/{tfr_files[ix]}')
+			fout_dict[toks[-4]] = (
+				int(toks[-1]),
+				int(toks[-2]),
+				int(toks[-3]),
+				f'{DS_SAVE_PATH}/{tfr_files[ix]}'
+			)
 
 		# Indicate we should terminate the calling function
 		return True
@@ -214,26 +228,71 @@ def get_dataset_for(nfft=1024, overlap=512, train_size=0.7, overwrite_existing=F
 
 	# Store as TFRecords
 	for part, gen in generators.items():
-		filename = TFE_FN_TEMPLATE.format(cmn_nrows, cmn_ncols, part, gen.agg_len)
-		filename = f'{DS_SAVE_PATH}/{filename}'
+		# Parse a filename
+		stmp = TFE_FN_TEMPLATE.format(
+			cmn_nrows, cmn_ncols, part, gen.__len__(), gen.agg_len, gen.batch)
+		filename = f'{DS_SAVE_PATH}/{stmp}'
+		
+		# Pass the generator for iteratively writing
+		# this partition to a tf record.
 		fout, filename = write_to_tf_records(filename, gen)
-		fout_dict[part] = (fout, filename)	
+		
+		# Return a structure to describe basics 
+		# of the dataset.
+		fout_dict[part] = (fout, gen.__len__(), gen.batch, filename)	
 	return fout_dict
 
+def splice_spectrogram_patches(patches, orig_cols):
+	# Compute the padding applied (if any)
+	# during data generation.
+	new_cols = patches[0].shape[-1] * len(patches)
+	padlen   = new_cols - orig_cols
+	
+	# Compute how much to trim from both
+	# ends of the spliced array.
+	padl = math.floor(padlen / 2)
+	padr = math.ceil( padlen / 2)
+
+	# Concatenate patches.
+	spliced = np.concatenate(patches, axis=-1)
+
+	# Trim padding from the last axis
+	spliced = spliced[..., padl:-padr]
+	return spliced
 
 class MotiongramSpectrogramGenerator:
 	
 	# "Static" Structure to store computed stfts.
 	# We make it static because the .wav files can 
-	# be repeated across test/train splits
+	# be repeated across test/train splits.
 	CMPSTFTS = {}
 
 	def __init__(self, aist_ids, nfft, overlap, shuffle=True):
 		self.aist_ids = aist_ids
 		self.nfft = nfft
 		self.overlap = overlap
+		self.nrows = nfft//2+1
 		self.ncols = FNCOLS(overlap)
+		self.ndims = 2
 		self.shuffle = shuffle
+
+		# Setup batching options
+		self.batch = MAX_MEM_BLOCK // (
+			self.nrows * FLOAT64BYTES
+		)
+
+		self.padlen = 0
+		self.padopt = self.ncols % self.batch
+		self.padding = [(0, 0) for _ in range(self.ndims)]
+
+		if self.padopt != 0:
+			self.padlen = self.batch - self.padopt
+			self.padl = math.floor(self.padlen / 2)
+			self.padr = math.ceil( self.padlen / 2)
+			self.padding[-1] = (self.padl, self.padr)
+
+		# Number of batches per specgram
+		self.numbatches = (self.ncols + self.padlen) // self.batch
 
 		# Init indexes 
 		self.indexes = np.arange(len(self.aist_ids))
@@ -256,27 +315,42 @@ class MotiongramSpectrogramGenerator:
 	def __call__(self):
 		for i in range(self.__len__()):
 			items = self.__getitem__(i)
-			for c in range(self.ncols):
-				yield items[0][:, c], items[1][:, c], items[2]
-
-			#yield self.__getitem__(i)
+			mg_batched = self.__batch_example(items[0])
+			sg_batched = self.__batch_example(items[1])
+			for j in range(self.numbatches):
+				yield mg_batched[j], sg_batched[j], items[-1]
 
 	@property
 	def agg_len(self):
-		return self.__len__() * self.ncols
+		return self.__len__() * self.numbatches
 
 	@property
 	def __cmpstfts(self):
 		return MotiongramSpectrogramGenerator.CMPSTFTS
 
+	def __batch_example(self, example):
+		example_padded = np.pad(example, self.padding, mode="reflect")
+		example_batched = [
+			example_padded[:, i*self.batch:(i+1)*self.batch]\
+				for i in range(self.numbatches)
+		]
+		return example_batched
+
 	def __compute_magnitudespec(self, music_id):
 		# Check if we have already computed a
 		# spectrogram for this music id
-		if music_id in self.__cmpstfts:
-			return self.__cmpstfts[music_id]
+		#if music_id in self.__cmpstfts:
+		#	return self.__cmpstfts[music_id]
+
+		# Lazily init offset
+		if not music_id in self.__cmpstfts:
+			self.__cmpstfts[music_id] = 0
 
 		# Load the audio data
-		y = loadaudio(f'{AU_SAVE_PATH}/{music_id}.wav')
+		y = loadaudio(
+			f'{AU_SAVE_PATH}/{music_id}.wav',
+			offset=self.__cmpstfts[music_id]
+		 )
 
 		# Compute the magnitude spectrogram.
 		# Normalize straight away (btw 0-1).
@@ -288,7 +362,12 @@ class MotiongramSpectrogramGenerator:
 
 		# Store in local structure to avoid
 		# reloading/recomputing
-		self.__cmpstfts[music_id] = magspec
+		#self.__cmpstfts[music_id] = magspec
+
+		# Advance the offset to apply next time
+		# the same music id is fetched.
+		self.__cmpstfts[music_id] =\
+			(self.__cmpstfts[music_id] + MAXDURSEC) % MAXOFFSET
 		return magspec
 
 	def __on_data_generation(self, aist_id_process):
@@ -299,6 +378,8 @@ class MotiongramSpectrogramGenerator:
 		magspec = self.__compute_magnitudespec(music_id)
 
 		# Load the motiongram (stored as .npy file)
+		# TODO: inline compute the motiongram instead of loading
+		# precomputed.
 		motiongram = np.load(f'{MG_SAVE_PATH}/{aist_id_process}.npy')
 
 		# Resize the motiongram to match the spectrograms
@@ -309,8 +390,6 @@ class MotiongramSpectrogramGenerator:
 		))
 
 		return motiongram, magspec
-		# Return a flattened view of the data.
-		#return motiongram.flatten(), magspec.flatten()
 
 
 

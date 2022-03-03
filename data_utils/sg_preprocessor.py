@@ -1,5 +1,6 @@
 import librosa
 import numpy as np
+from scipy.signal.windows import tukey
 
 __all__ = [
 	"loadaudio",
@@ -9,29 +10,39 @@ __all__ = [
 	"spectrogram2audio",
 	"FNCOLS",
 	"MAXDURSEC",
+	"MAXOFFSET",
 	"SAMPLERATE",
-	#"HOP_LENGTH_22050_4_SEC_128C",
 	"TOPDB",
 	"REFDB"
 ]
 
 # AUDIOLOAD & STFT PARAMETERS
 MAXDURSEC  = 4
+MAXOFFSET  = 16
 SAMPLERATE = 22050
-#HOP_LENGTH_22050_4_SEC_128C = 690
 
 # DB NORMALIZATION PARAMETERS
 TOPDB = 80.
 REFDB = 100.
 
+# WINDOWS
+TALPH = 0.3
+TSAMP = MAXDURSEC * SAMPLERATE
+TUKEY = tukey(TSAMP, alpha=TALPH)
+
 # Convenience Lambda(s)
 FNCOLS = lambda hl: int(np.ceil(MAXDURSEC * SAMPLERATE / hl))
  
-def loadaudio(audiofile):
+def loadaudio(audiofile, offset=0):
 	y, _ = librosa.load(
-		audiofile, duration=MAXDURSEC, mono=True, sr=SAMPLERATE
+		audiofile, 
+		offset=offset, 
+		duration=MAXDURSEC, 
+		mono=True, 
+		sr=SAMPLERATE
 	)
 	y = y / np.amax(np.abs(y))
+	y = np.multiply(y, TUKEY)
 	return y	
 
 def normalize_db_0_1(magspec):
