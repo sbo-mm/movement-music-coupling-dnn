@@ -339,19 +339,14 @@ class MotiongramSpectrogramGenerator:
 	def __compute_magnitudespec(self, music_id):
 		# Check if we have already computed a
 		# spectrogram for this music id
-		#if music_id in self.__cmpstfts:
-		#	return self.__cmpstfts[music_id]
-
-		# Lazily init offset
-		if not music_id in self.__cmpstfts:
-			self.__cmpstfts[music_id] = 0
+		if music_id in self.__cmpstfts:
+			return self.__cmpstfts[music_id]
 
 		# Load the audio data
 		y = loadaudio(
-			f'{AU_SAVE_PATH}/{music_id}.wav',
-			offset=self.__cmpstfts[music_id]
+			f'{AU_SAVE_PATH}/{music_id}.wav'
 		 )
-
+		
 		# Compute the magnitude spectrogram.
 		# Normalize straight away (btw 0-1).
 		magspec = compute_magnitudespec(
@@ -362,12 +357,7 @@ class MotiongramSpectrogramGenerator:
 
 		# Store in local structure to avoid
 		# reloading/recomputing
-		#self.__cmpstfts[music_id] = magspec
-
-		# Advance the offset to apply next time
-		# the same music id is fetched.
-		self.__cmpstfts[music_id] =\
-			(self.__cmpstfts[music_id] + MAXDURSEC) % MAXOFFSET
+		self.__cmpstfts[music_id] = magspec
 		return magspec
 
 	def __on_data_generation(self, aist_id_process):
