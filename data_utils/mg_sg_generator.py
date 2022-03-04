@@ -7,6 +7,8 @@ import numpy as np
 import tensorflow as tf
 from librosa.util import MAX_MEM_BLOCK as libMEM_BLOCK
 
+from data_utils import DATASET_DTYPE
+
 from data_utils.sg_preprocessor import loadaudio, FNCOLS
 from data_utils.sg_preprocessor import MAXDURSEC, MAXOFFSET
 from data_utils.sg_preprocessor import compute_magnitudespec
@@ -33,10 +35,17 @@ MG_SAVE_PATH   = BASE_DATA_PATH + "/motiongrams"
 AU_SAVE_PATH   = BASE_DATA_PATH + "/dance_wav"
 DS_SAVE_PATH   = BASE_DATA_PATH + "/datasets"
 
-# Filename templates
-NROW_TOKIDX = 3
-NCOL_TOKIDX = 4
+# TEMPLATE STRUCTURE:
+# mg_sg_pair_ROWSxCOLS_PARTITION_ACTUALEXAMPLES_AGGREGATEDEXAMPLES_BATCHSIZE`
+# e.g. mg_sg_pair_129x690_train_1054_6324_127
 TFE_FN_TEMPLATE = "mg_sg_pair_{0}x{1}_{2}_{3}_{4}_{5}"
+
+# Template indexers
+ROW_COL_IDX      = -5
+PARTITION_IDX    = -4
+NUM_EXAMPLES_IDX = -3
+AGG_EXAMPLES_IDX = -2
+BATCH_SIZE_IDX   = -1
 
 # Random States
 SPLT_RND_STATE = 1337
@@ -112,7 +121,9 @@ def parse_tfr_example(example, cast_to_type=None):
 		'labels'      : tf.io.FixedLenFeature([], tf.string),
 		'memlen'      : tf.io.FixedLenFeature([],  tf.int64),
 		'motiongram'  : tf.io.FixedLenFeature([], tf.string),
-		'spectrogram' : tf.io.FixedLenFeature([], tf.string)
+		'spectrogram' : tf.io.FixedLenFeature([], tf.string),
+		'mg_dtype'    : tf.io.FixedLenFeature([], tf.string),
+		'sg_dtype'    : tf.io.FixedLenFeature([], tf.string),
 	}
 
 	# Extract the contents of the example at the tfrecords file
@@ -120,15 +131,15 @@ def parse_tfr_example(example, cast_to_type=None):
 	mg_, sg_ = content['motiongram'], content['spectrogram']
 	shapelen = content['memlen']
 	
-	mg_feature = tf.io.parse_tensor(mg_, out_type=tf.float32)
+	mg_feature = tf.io.parse_tensor(mg_, out_type=tf.dtypes.as_dtype(DATASET_DTYPE))
 	mg_feature = tf.reshape(mg_feature, shape=[shapelen])
-	sg_feature = tf.io.parse_tensor(sg_, out_type=tf.float32)
+	sg_feature = tf.io.parse_tensor(sg_, out_type=tf.dtypes.as_dtype(DATASET_DTYPE))
 	sg_feature = tf.reshape(sg_feature, shape=[shapelen])
 
 	# Cast to another type if desired
-	if cast_to_type is not None:
-		mg_feature = tf.cast(mg_feature, dtype=cast_to_type)
-		sg_feature = tf.cast(sg_feature, dtype=cast_to_type)
+	if (cast_to_type is not None) and (cast_to_type is not DATASET_DTYPE):
+			mg_feature = tf.cast(mg_feature, dtype=cast_to_type)
+			sg_feature = tf.cast(sg_feature, dtype=cast_to_type)
 
 	return mg_feature, sg_feature
 
@@ -160,7 +171,9 @@ def parse_single_example(motiongram, spectrogram, id_string: str):
 		"labels"	  : _bytes_feature(serialize_array(id_string)),	
 		"memlen"      : _int64_feature(np.prod(motiongram.shape)),
 		"motiongram"  : _bytes_feature(serialize_array(motiongram)),
-		"spectrogram" : _bytes_feature(serialize_array(spectrogram))
+		"spectrogram" : _bytes_feature(serialize_array(spectrogram)),
+		"mg_dtype"    : _bytes_feature(serialize_array(motiongram.dtype.name)),
+		"sg_dtype"    : _bytes_feature(serialize_array(motiongram.dtype.name))
 	}
 	out = tf.train.Example(features=tf.train.Features(feature=data))
 	return out
@@ -192,9 +205,9 @@ def fetch_if_ds_exists_for(nfft_num, fout_dict):
 			toks = record.split('_')
 			# Populate the output structure (passed by ref)
 			fout_dict[toks[-4]] = (
-				int(toks[-1]),
-				int(toks[-2]),
-				int(toks[-3]),
+				int(toks[AGG_EXAMPLES_IDX]),
+				int(toks[NUM_EXAMPLES_IDX]),
+				int(toks[BATCH_SIZE_IDX]),
 				f'{DS_SAVE_PATH}/{tfr_files[ix]}'
 			)
 
@@ -346,7 +359,7 @@ class MotiongramSpectrogramGenerator:
 		y = loadaudio(
 			f'{AU_SAVE_PATH}/{music_id}.wav'
 		 )
-		
+
 		# Compute the magnitude spectrogram.
 		# Normalize straight away (btw 0-1).
 		magspec = compute_magnitudespec(
@@ -355,30 +368,39 @@ class MotiongramSpectrogramGenerator:
 			with_db_normalization=True
 		)
 
+		# Check if we should cast the data.
+		if magspec.dtype.name != DATASET_DTYPE:
+			magspec = magspec.astype(DATASET_DTYPE)
+
 		# Store in local structure to avoid
 		# reloading/recomputing
 		self.__cmpstfts[music_id] = magspec
 		return magspec
 
-	def __on_data_generation(self, aist_id_process):
-		# Fetch the music id
-		music_id = extract_music_id(aist_id_process)
-
-		# Compute magnitude spectrogram
-		magspec = self.__compute_magnitudespec(music_id)
-
+	def __compute_motiongram(self, motiongram_id, mg_newshape):
 		# Load the motiongram (stored as .npy file)
 		# TODO: inline compute the motiongram instead of loading
 		# precomputed.
-		motiongram = np.load(f'{MG_SAVE_PATH}/{aist_id_process}.npy')
+		motiongram = np.load(f'{MG_SAVE_PATH}/{motiongram_id}.npy')
 
 		# Resize the motiongram to match the spectrograms
 		# dimensionality
 		motiongram = np.transpose(cv2.resize(
-			motiongram.T, magspec.shape,
+			motiongram.T, mg_newshape,
 			interpolation=cv2.INTER_AREA 
 		))
+		
+		# Check if we should cast the data.
+		if motiongram.dtype.name != DATASET_DTYPE:
+			motiongram = motiongram.astype(DATASET_DTYPE)
 
+		return motiongram	
+
+	def __on_data_generation(self, aist_id_process):
+		# Fetch the music id
+		music_id   = extract_music_id(aist_id_process)
+		magspec    = self.__compute_magnitudespec(music_id)
+		motiongram = self.__compute_motiongram(aist_id_process, magspec.shape)
 		return motiongram, magspec
 
 

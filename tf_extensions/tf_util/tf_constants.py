@@ -1,7 +1,8 @@
 import tensorflow as tf
-import tensorflow.keras.backend as K
 
-K.set_floatx('float64')
+# Import keras backend from toplevel module
+from .. import KERAS_BACKEND as K
+
 __BASE_CPU_PI   = 3.14159265
 __BASE_CPU_LOG2 = 0.69314718056
 

@@ -1,11 +1,10 @@
 import tensorflow as tf
-from tensorflow.keras import backend as K
 
 # Custom imports
 from .. import tf_util 
 
-# Set global parameters for this file
-K.set_floatx('float64')
+# Import keras backend from toplevel module
+from .. import KERAS_BACKEND as K
 
 all = [
     "SpectralPhaseLogProbLoss",

@@ -1,6 +1,5 @@
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras import backend as K
 
 # Keras imports
 from tensorflow.keras.models import Model
@@ -9,13 +8,12 @@ from tensorflow.keras.layers import Layer, Flatten, Reshape
 from tensorflow.keras.layers import Input, Dense, Conv1D, Conv2D
 from .layers import Snake 
 
-# Set global parameters for this file
-K.set_floatx('float64')
-
 # Custom imports
 from .. import tf_util 
 from .. tf_util import TF_PI, TF_LOG2
 
+# Import keras backend from toplevel module
+from .. import KERAS_BACKEND as K
 
 __all__ = [
 	"GaussianBetaVAE",
@@ -120,7 +118,7 @@ class BaseVAE(tf.keras.models.Model):
 			_, l_rec, l_reg = self.compute_negative_elbo(
 				x, y, freebits=0.05, training=True)
 			loss, m_reg, m_rec = self.get_loss(l_rec, l_reg)
-			loss *= self.NM; m_reg *= self.NM; m_rec *= self.NM;
+			#loss *= self.NM; m_reg *= self.NM; m_rec *= self.NM;
 			self.elbo_loss.update_state(loss)
 			
 		gradients = tape.gradient(loss, self.trainable_variables)
@@ -134,7 +132,7 @@ class BaseVAE(tf.keras.models.Model):
 		_, l_rec, l_reg = self.compute_negative_elbo(
 			x, y, freebits=0.05, training=False)
 		loss, m_reg, m_rec = self.get_loss(l_rec, l_reg)
-		loss *= self.NM; m_reg *= self.NM; m_rec *= self.NM;
+		#loss *= self.NM; m_reg *= self.NM; m_rec *= self.NM;
 		self.elbo_loss.update_state(loss)
 		self.reg_loss.update_state(m_reg)
 		self.rec_loss.update_state(m_rec)
