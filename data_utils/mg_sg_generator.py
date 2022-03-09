@@ -5,7 +5,7 @@ import math
 import cv2
 import numpy as np
 import tensorflow as tf
-from librosa.util import MAX_MEM_BLOCK as libMEM_BLOCK
+from librosa.util import MAX_MEM_BLOCK as ROSA_MAX_MEM_BLOCK
 
 from data_utils import DATASET_DTYPE
 
@@ -57,7 +57,7 @@ PREFECTH_ADDEND  = 100
 
 # MEMORY PARAMS
 FLOAT64BYTES = 8
-MAX_MEM_BLOCK = libMEM_BLOCK // 2
+MAX_MEM_BLOCK = ROSA_MAX_MEM_BLOCK // 2
 
 def num_examples():
 	return len(os.listdir(f'{MG_SAVE_PATH}/'))
@@ -121,9 +121,7 @@ def parse_tfr_example(example, cast_to_type=None):
 		'labels'      : tf.io.FixedLenFeature([], tf.string),
 		'memlen'      : tf.io.FixedLenFeature([],  tf.int64),
 		'motiongram'  : tf.io.FixedLenFeature([], tf.string),
-		'spectrogram' : tf.io.FixedLenFeature([], tf.string),
-		'mg_dtype'    : tf.io.FixedLenFeature([], tf.string),
-		'sg_dtype'    : tf.io.FixedLenFeature([], tf.string),
+		'spectrogram' : tf.io.FixedLenFeature([], tf.string)
 	}
 
 	# Extract the contents of the example at the tfrecords file
@@ -131,12 +129,16 @@ def parse_tfr_example(example, cast_to_type=None):
 	mg_, sg_ = content['motiongram'], content['spectrogram']
 	shapelen = content['memlen']
 	
-	mg_feature = tf.io.parse_tensor(mg_, out_type=tf.dtypes.as_dtype(DATASET_DTYPE))
+	# Fetch the datatype(s) of the contents
+	cdtype = tf.dtypes.as_dtype(DATASET_DTYPE)
+
+	mg_feature = tf.io.parse_tensor(mg_, out_type=cdtype)
 	mg_feature = tf.reshape(mg_feature, shape=[shapelen])
-	sg_feature = tf.io.parse_tensor(sg_, out_type=tf.dtypes.as_dtype(DATASET_DTYPE))
+	sg_feature = tf.io.parse_tensor(sg_, out_type=cdtype)
 	sg_feature = tf.reshape(sg_feature, shape=[shapelen])
 
-	# Cast to another type if desired
+	# Cast to another type if desired (might be removed in future).
+	# I dont like conditional branches in the tf graph.
 	if (cast_to_type is not None) and (cast_to_type is not DATASET_DTYPE):
 			mg_feature = tf.cast(mg_feature, dtype=cast_to_type)
 			sg_feature = tf.cast(sg_feature, dtype=cast_to_type)
@@ -168,12 +170,10 @@ def prepare_dataset_for_training(filename, batch_size, cast_to_type=None):
 
 def parse_single_example(motiongram, spectrogram, id_string: str):
 	data = {
-		"labels"	  : _bytes_feature(serialize_array(id_string)),	
+		"labels"      : _bytes_feature(serialize_array(id_string)),	
 		"memlen"      : _int64_feature(np.prod(motiongram.shape)),
 		"motiongram"  : _bytes_feature(serialize_array(motiongram)),
-		"spectrogram" : _bytes_feature(serialize_array(spectrogram)),
-		"mg_dtype"    : _bytes_feature(serialize_array(motiongram.dtype.name)),
-		"sg_dtype"    : _bytes_feature(serialize_array(motiongram.dtype.name))
+		"spectrogram" : _bytes_feature(serialize_array(spectrogram))
 	}
 	out = tf.train.Example(features=tf.train.Features(feature=data))
 	return out
@@ -204,7 +204,7 @@ def fetch_if_ds_exists_for(nfft_num, fout_dict):
 		for record, ix in existing_records:
 			toks = record.split('_')
 			# Populate the output structure (passed by ref)
-			fout_dict[toks[-4]] = (
+			fout_dict[toks[PARTITION_IDX]] = (
 				int(toks[AGG_EXAMPLES_IDX]),
 				int(toks[NUM_EXAMPLES_IDX]),
 				int(toks[BATCH_SIZE_IDX]),
@@ -241,7 +241,8 @@ def get_dataset_for(nfft=1024, overlap=512, train_size=0.7, overwrite_existing=F
 
 	# Store as TFRecords
 	for part, gen in generators.items():
-		# Parse a filename
+		# Parse a filename.
+		# See `TFE_FN_TEMPLATE` definition.
 		stmp = TFE_FN_TEMPLATE.format(
 			cmn_nrows, cmn_ncols, part, gen.__len__(), gen.agg_len, gen.batch)
 		filename = f'{DS_SAVE_PATH}/{stmp}'
@@ -384,7 +385,7 @@ class MotiongramSpectrogramGenerator:
 		motiongram = np.load(f'{MG_SAVE_PATH}/{motiongram_id}.npy')
 
 		# Resize the motiongram to match the spectrograms
-		# dimensionality
+		# dimensionality (will be deprecated in future).
 		motiongram = np.transpose(cv2.resize(
 			motiongram.T, mg_newshape,
 			interpolation=cv2.INTER_AREA 

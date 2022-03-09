@@ -1,11 +1,13 @@
+import math
 import numpy as np
 import tensorflow as tf
 
 # Keras imports
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import LeakyReLU
-from tensorflow.keras.layers import Layer, Flatten, Reshape 
-from tensorflow.keras.layers import Input, Dense, Conv1D, Conv2D
+from tensorflow.keras.layers import Input, Dense, Add
+from tensorflow.keras.layers import Layer, Flatten, Reshape, ZeroPadding2D, concatenate 
+from tensorflow.keras.layers import Conv1D, Conv2D, Conv2DTranspose, MaxPooling2D, GlobalAveragePooling2D
 from .layers import Snake 
 
 # Custom imports
@@ -18,7 +20,9 @@ from .. import KERAS_BACKEND as K
 __all__ = [
 	"GaussianBetaVAE",
 	"make_cnn_vae_encoder",
-	"make_dense_vae_decoder"
+	"make_dense_vae_decoder",
+	"make_res_cnn_vae_encoder",
+	"make_deconv_inception_cnn_vae_decoder"
 ]
 
 
@@ -165,10 +169,10 @@ class GaussianBetaVAE(BaseVAE):
 
 class Conv1DBlock(Layer):
 	
-	def __init__(self, maps, kernel, strides=2, alpha=1, *args, **kwargs):
+	def __init__(self, maps, kernel, strides=1, alpha=0.3, *args, **kwargs):
 		super(Conv1DBlock, self).__init__(*args, **kwargs)
 		self.conv = Conv1D(maps, kernel_size=kernel, strides=strides, padding="same")
-		self.acti = LeakyReLU()
+		self.acti = LeakyReLU(alpha)
 	
 	def call(self, inputs):
 		x = self.conv(inputs)
@@ -177,30 +181,191 @@ class Conv1DBlock(Layer):
  
 class Conv2DBlock(Layer):
 	
-	def __init__(self, maps, kernel, strides=2, alpha=1, *args, **kwargs):
+	def __init__(self, maps, kernel, strides=1, alpha=0.3, *args, **kwargs):
 		super(Conv2DBlock, self).__init__(*args, **kwargs)
 		self.conv = Conv2D(maps, kernel_size=kernel, strides=strides, padding="same")
-		self.acti = LeakyReLU()
+		self.acti = LeakyReLU(alpha=alpha)
 	
 	def call(self, inputs):
 		x = self.conv(inputs)
 		return self.acti(x) 
 
 
+class Deconv2DBlock(Layer):
+	
+	def __init__(self, maps, kernel, strides=1, alpha=0.3, *args, **kwargs):
+		super(Deconv2DBlock, self).__init__(*args, **kwargs)
+		self.deconv = Conv2DTranspose(maps, kernel_size=kernel, strides=strides, padding="same")
+		self.acti   = LeakyReLU(alpha=alpha)
+	
+	def call(self, inputs):
+		x = self.deconv(inputs)
+		return self.acti(x) 
+
+
+class AsyncConv2DBlock(Layer):
+	
+	def __init__(self, maps, ksize, alpha=0.3, *args, **kwargs):
+		super(AsyncConv2DBlock, self).__init__(*args, **kwargs)
+		self.aconv_0 = Conv2DBlock(maps, (ksize, 1), 1, alpha)
+		self.aconv_1 = Conv2DBlock(maps, (1, ksize), 1, alpha)
+	
+	def call(self, inputs):
+		x = self.aconv_0(inputs)
+		return self.aconv_1(x) 
+
+
+class InceptionBlock(Layer):
+	def __init__(self, maps, outchannels, *args, **kwargs):
+		super(InceptionBlock, self).__init__(*args, **kwargs)		
+		self.branches = [
+			[AsyncConv2DBlock(maps, 3), AsyncConv2DBlock(maps, 5)],
+			[AsyncConv2DBlock(maps, 3), AsyncConv2DBlock(maps, 5)],
+			[AsyncConv2DBlock(maps, 3), AsyncConv2DBlock(maps, 5)],
+			#[AsyncConv2DBlock(maps, 7), AsyncConv2DBlock(maps, 9)],
+			#[AsyncConv2DBlock(maps, 7), AsyncConv2DBlock(maps, 9)]
+		]
+		self.proj = Conv2DBlock(outchannels, (1, 1), (1, 1))
+
+	@tf.autograph.experimental.do_not_convert
+	def call(self, inputs, training=True):
+		
+		outbranches = []
+		for branch in self.branches:
+			xn = branch[0](inputs)
+			xn = branch[1](xn)
+			outbranches.append(xn)
+
+		concat = concatenate(outbranches, axis=-1)
+		return self.proj(concat)
+
+
 class DenseBlock(Layer):
 
-	def __init__(self, units, alpha=1, *args, **kwargs):
+	def __init__(self, units, alpha=0.3, *args, **kwargs):
 		super(DenseBlock, self).__init__(*args, **kwargs)
 		self.dense = Dense(units)
-		self.acti  = LeakyReLU()
+		self.acti  = LeakyReLU(alpha=alpha)
 
 	def call(self, inputs):
 		x = self.dense(inputs)
 		return self.acti(x)
 
- 
-# Deliver model(s) through a function to use tf pruning capabilties later on.
-# Subclassed models are currently not supported (as of tf 2.4.1)
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Deliver model(s) through a function to use tf pruning capabilties later on. #
+# Subclassed models are currently not supported (as of tf 2.4.1)              #
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+
+
+def make_res_cnn_vae_encoder(input_dims, latent_size):
+	'''
+		This model assumes `inputs_dims` is a power of 2,
+		i.e. inputs_dims[0] == pow2 and inputs_dims[1] == pow2
+		and by extension their product is a power of 2 as well.
+		The same if assumed from the `latent_size`, which is a
+		scalar.
+	'''
+
+	input_size = np.prod(input_dims)
+
+	# Quick assertion to validate that input and latent
+	# sizes are indeed powers of 2.
+	ispow2 = lambda n: (n & (n-1) == 0) and n != 0
+	assert (ispow2(input_size) and ispow2(latent_size)),\
+		f"Input arguments are not powers of 2: ({input_size} or {latent_size} != pow2)"
+
+	num_redux = int((math.log2(input_size) - math.log2(latent_size)) // 2)
+	mp_ksize  = int(2**num_redux)
+
+	# Setup the input layer
+	encoder_input = Input(shape=(input_size, ), name="encoder_input")
+
+	# Reshape into NxMxC representation
+	x0 = Reshape((*input_dims, 1))(encoder_input)
+
+	# Branch 1 (dimensionality reduction)
+	x1 = Conv2DBlock(64, (3, 3), (2, 2))(x0)
+	for _ in range(num_redux - 1):
+		x1 = Conv2DBlock(64, (3, 3), (2, 2))(x1)
+
+	# Branch 2 (top level feature extraction and skip conn)
+	x2 = MaxPooling2D(pool_size=mp_ksize)(x0)
+	x2 = Conv2DBlock(64, (1, 1), (1, 1))(x2)
+
+	# Concat (resnet approach) top and low-level features
+	x3 = concatenate([x1, x2], axis=-1)
+
+	# Project feature maps to a single (1) channel
+	x4 = Conv2DBlock(1, (1, 1), (1, 1))(x3)
+
+	# Create the output layer (special for VAE)
+	encoder_output = Dense(2*latent_size, name="encoder_output")(Flatten()(x4))
+
+	# Return a Keras Model object 
+	return Model(inputs=[encoder_input], outputs=[encoder_output], name="encoder")
+
+
+def make_deconv_inception_cnn_vae_decoder(output_dims, latent_size):
+	output_size = np.prod(output_dims)
+
+	# Quick assertion to validate that input and latent
+	# sizes are indeed powers of 2.
+	ispow2 = lambda n: (n & (n-1) == 0) and n != 0
+	assert (ispow2(output_size) and ispow2(latent_size)),\
+		f"Input arguments are not powers of 2: ({input_size} or {latent_size} != pow2)"
+
+	num_upsamp = int((math.log2(output_size) - math.log2(latent_size)) // 2)
+	redux_fact = int(2**num_upsamp)
+
+	# Setup the input layer
+	decoder_input = Input(shape=(latent_size, ), name="decoder_input")
+
+	# Reshape into MxNxC representation
+	M, N = (d//redux_fact for d in output_dims) 
+	z0 = Reshape((M, N, 1))(decoder_input)
+
+	# Deconvolute to the orig dims (upsample)
+	z1 = Deconv2DBlock(16, (5, 5), (2, 2))(z0)
+	for _ in range(num_upsamp - 1):
+		z1 = Deconv2DBlock(16, (3, 3), (2, 2))(z1)
+
+	# Zero pad the input (i.e. z) to perform a
+	# skip connection
+	padl = (output_dims[0]-M)//2
+	padr = (output_dims[1]-N)//2
+	z2 = ZeroPadding2D(padding=(padl, padr))(z0)
+
+	# Project channels upwards
+	z2 = Conv2DBlock(16, (1, 1), (1, 1))(z2)
+
+	# Perform a skip connection
+	z3 = concatenate([z1, z2], axis=-1)
+	z3 = Conv2DBlock(1, (1, 1), (1, 1))(z3)
+
+	# Pass through inception block for multi-scale
+	# reconstruction
+	b0 = Conv2DBlock(16, (1, 1), (1, 1))(z3)
+
+	b1 = Conv2DBlock(16, (1, 1), (1, 1))(z3)
+	b1 = AsyncConv2DBlock(16, 3)(b1)
+
+	b2 = Conv2DBlock(16, (1, 1), (1, 1))(z3)
+	b2 = AsyncConv2DBlock(16, 5)(b1)
+
+	b3 = MaxPooling2D(pool_size=(3, 3), strides=(1, 1), padding="same")(z3)
+	b3 = Conv2DBlock(16, (1, 1), (1, 1))(b3)
+
+	z4 = concatenate([b0, b1, b2, b3, z2], axis=-1)
+	z4 = Conv2DBlock(1, (1, 1), (1, 1))(z4)
+
+	# Create the output layer (special for VAE)
+	decoder_output = Dense(2*output_size, name="decoder_output")(Flatten()(z4))
+
+	# Return a Keras Model object 
+	return Model(inputs=[decoder_input], outputs=[decoder_output], name="encoder")
+
+
 def make_cnn_vae_encoder(input_dims, latent_dim):
 	# Setup input dimensions for the nn
 	input_shape      = (np.prod(input_dims), )

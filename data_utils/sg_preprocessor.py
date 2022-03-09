@@ -64,7 +64,7 @@ def inverse_normalize_db_0_1(magspec_db_0_1):
 
 def compute_stft(y, nfft=1024, overlap=512):
 	stft = librosa.stft(
-		y 		   = y, 
+		y          = y, 
 		n_fft      = nfft, 
 		hop_length = overlap, 
 		window     = "hamming"
@@ -92,5 +92,27 @@ def spectrogram2audio(magspec, hop_length, with_inverse_normalize=False):
 	)
 	y = y / np.amax(np.abs(y))
 	return y
+
+
+def logspecplot(magspec, hop_length, fig, ax, with_inverse_normalize=False):
+	
+	if with_inverse_normalize:
+		magspec = inverse_normalize_db_0_1(magspec)
+
+	magspec = librosa.amplitude_to_db(
+		magspec, ref=np.max)
+
+	img = librosa.display.specshow(
+		data       =  magspec, 
+		x_axis     = 'time', 
+		y_axis     = 'log',
+		hop_length = hop_length,
+		sr         = SAMPLERATE,
+		ax         = ax
+	)
+	ax.set(title='Log-frequency power spectrogram')
+	fig.colorbar(img, ax=ax, format="%+2.f dB")
+	return img
+
 
 
